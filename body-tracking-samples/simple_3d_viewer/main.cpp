@@ -203,10 +203,13 @@ void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int dep
             //    maxDepthValue = depth_image_data[i];
             //}
         }
-        depth_image_data[i] = 0;
+        else
+        {
+            depth_image_data[i] = 0;
+        }
         
     }
-    k4a_image_t segmentedDepthImage = k4a_image_create_from_buffer(depth_image_data);
+    //k4a_image_t segmentedDepthImage = k4a_image_create_from_buffer(depth_image_data);
     //std::cout << minDepthValue << '\t' << maxDepthValue << '\n';
 
     k4a_image_release(bodyIndexMap);
