@@ -13,6 +13,10 @@
 #include <BodyTrackingHelpers.h>
 #include <Utilities.h>
 #include <Window3dWrapper.h>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+
 
 void PrintUsage()
 {
@@ -176,9 +180,12 @@ void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int dep
     // Read body index map and assign colors
     k4a_image_t bodyIndexMap = k4abt_frame_get_body_index_map(bodyFrame);
     const uint8_t* bodyIndexMapBuffer = k4a_image_get_buffer(bodyIndexMap);
-    int size = pointCloudColors.size();
-    printf("size of point cloud: %d\n", size);
-
+    //int size = pointCloudColors.size();
+    //printf("size of point cloud: %d\n", size);
+    size_t sizet = k4a_image_get_size(depthImage);
+    uint16_t* depth_image_data = (uint16_t*)(void*)k4a_image_get_buffer(depthImage);
+    uint16_t minDepthValue=UINT_MAX;
+    uint16_t maxDepthValue=0;
     for (int i = 0; i < depthWidth * depthHeight; i++)
     {
         uint8_t bodyIndex = bodyIndexMapBuffer[i];
@@ -186,8 +193,22 @@ void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int dep
         {
             uint32_t bodyId = k4abt_frame_get_body_id(bodyFrame, bodyIndex);
             pointCloudColors[i] = g_bodyColors[bodyId % g_bodyColors.size()];
+            //if (depth_image_data[i] < minDepthValue)
+            //{
+            //    minDepthValue = depth_image_data[i];
+            //}
+
+            //if (depth_image_data[i] > maxDepthValue)
+            //{
+            //    maxDepthValue = depth_image_data[i];
+            //}
         }
+        depth_image_data[i] = 0;
+        
     }
+    k4a_image_t segmentedDepthImage = k4a_image_create_from_buffer(depth_image_data);
+    //std::cout << minDepthValue << '\t' << maxDepthValue << '\n';
+
     k4a_image_release(bodyIndexMap);
 
     // Visualize point cloud
@@ -245,6 +266,72 @@ void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int dep
     k4a_capture_release(originalCapture);
     k4a_image_release(depthImage);*/
 
+}
+
+static void generate_point_cloud(const k4a_image_t depth_image,
+    const k4a_image_t xy_table,
+    k4a_image_t point_cloud,
+    int* point_count)
+{
+    int width = k4a_image_get_width_pixels(depth_image);
+    int height = k4a_image_get_height_pixels(depth_image);
+
+    uint16_t* depth_data = (uint16_t*)(void*)k4a_image_get_buffer(depth_image);
+    k4a_float2_t* xy_table_data = (k4a_float2_t*)(void*)k4a_image_get_buffer(xy_table);
+    k4a_float3_t* point_cloud_data = (k4a_float3_t*)(void*)k4a_image_get_buffer(point_cloud);
+
+    *point_count = 0;
+    for (int i = 0; i < width * height; i++)
+    {
+        if (depth_data[i] != 0 && !isnan(xy_table_data[i].xy.x) && !isnan(xy_table_data[i].xy.y))
+        {
+            point_cloud_data[i].xyz.x = xy_table_data[i].xy.x * (float)depth_data[i];
+            point_cloud_data[i].xyz.y = xy_table_data[i].xy.y * (float)depth_data[i];
+            point_cloud_data[i].xyz.z = (float)depth_data[i];
+            (*point_count)++;
+        }
+        else
+        {
+            point_cloud_data[i].xyz.x = nanf("");
+            point_cloud_data[i].xyz.y = nanf("");
+            point_cloud_data[i].xyz.z = nanf("");
+        }
+    }
+}
+
+static void write_point_cloud(const char* file_name, const k4a_image_t point_cloud, int point_count)
+{
+    int width = k4a_image_get_width_pixels(point_cloud);
+    int height = k4a_image_get_height_pixels(point_cloud);
+
+    k4a_float3_t* point_cloud_data = (k4a_float3_t*)(void*)k4a_image_get_buffer(point_cloud);
+
+    // save to the ply file
+    std::ofstream ofs(file_name); // text mode first
+    ofs << "ply" << std::endl;
+    ofs << "format ascii 1.0" << std::endl;
+    ofs << "element vertex"
+        << " " << point_count << std::endl;
+    ofs << "property float x" << std::endl;
+    ofs << "property float y" << std::endl;
+    ofs << "property float z" << std::endl;
+    ofs << "end_header" << std::endl;
+    ofs.close();
+
+    std::stringstream ss;
+    for (int i = 0; i < width * height; i++)
+    {
+        if (isnan(point_cloud_data[i].xyz.x) || isnan(point_cloud_data[i].xyz.y) || isnan(point_cloud_data[i].xyz.z))
+        {
+            continue;
+        }
+
+        ss << (float)point_cloud_data[i].xyz.x << " " << (float)point_cloud_data[i].xyz.y << " "
+            << (float)point_cloud_data[i].xyz.z << std::endl;
+    }
+
+    std::ofstream ofs_text(file_name, std::ios::out | std::ios::app);
+    ofs_text.write(ss.str().c_str(), (std::streamsize)ss.str().length());
 }
 
 void PlayFile(InputSettings inputSettings)
