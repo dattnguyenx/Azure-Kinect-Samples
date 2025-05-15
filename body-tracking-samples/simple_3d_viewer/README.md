@@ -35,3 +35,29 @@ e.g.   simple_3d_viewer.exe WFOV_BINNED CPU
 * h: help
 * b: body visualization mode
 * k: 3d window layout
+
+
+### Additional info for human body extraction and saving depth frame to PNG/point cloud
+Additional modules have been added into the original source for: 
+* Remove/keep background from the scene
+* Compress the modified scene to PNG images or export to point clouds for further compression
+Carefully check the main.cpp for details
+## Steps:
+* Modify the path in main.cpp to match your local files/folders
+* Build the program, the easiest way is using Microsoft Visual Studio, the output will be written to simple_3d_viewer.exe
+
+* Start the program
+```
+cd simple_3d_viewer\build\bin\Debug
+.\simple_3d_viewer.exe OFFLINE "C:\Users\ke76boqe\Projects\DepthCompression\test.mkv"
+```
+* The PNG images will be written into folder ``` output_png_file_name``` and point clouds in .ply format will be written into folder ```point_cloud_file_name```
+* The PNG images is already a compressed format, no further step needed
+* The .ply point clouds can be encoded using provided source in point_cloud_coding/
+
+
+## PNG images coding: 
+
+## Point Cloud Coding
+* main.py takes 2 paths as input, input_glob is the folder where the .ply can be found and output where the bitstream will be stored
+* run: python3 main.py in a python3 environment with numpy, pyntcloud, pickle, math, glob packages
