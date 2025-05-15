@@ -9,14 +9,18 @@
 #include <k4arecord/playback.h>
 #include <k4a/k4a.h>
 #include <k4abt.h>
-
+#include <k4arecord/record.h>
 #include <BodyTrackingHelpers.h>
 #include <Utilities.h>
 #include <Window3dWrapper.h>
 #include <iostream>
 #include <fstream>
 #include <sstream>
-
+#include <iomanip>
+#include <opencv2/opencv.hpp>
+//#include <recorder.h>
+using namespace cv;
+std::stringstream ss;
 
 void PrintUsage()
 {
@@ -63,8 +67,10 @@ void PrintAppUsage()
 bool s_isRunning = true;
 Visualization::Layout3d s_layoutMode = Visualization::Layout3d::OnlyMainView;
 bool s_visualizeJointFrame = false;
-
-
+// global variable
+std::string output_png_file_name = "C:\\Users\\ke76boqe\\Projects\\Body_tracking\\body-tracking-samples\\FullDepth\\d_";
+std::string point_cloud_file_name = "C:\\Users\\ke76boqe\\Projects\\Body_tracking\\body-tracking-samples\\PointCloud\\frame";
+char const* output_mkv = "C:\\Users\\ke76boqe\\Projects\\Body_tracking\\body-tracking-samples\\modified_video.mkv";
 int64_t ProcessKey(void* /*context*/, int key)
 {
     // https://www.glfw.org/docs/latest/group__keys.html
@@ -142,8 +148,8 @@ bool ParseInputSettingsFromArg(int argc, char** argv, InputSettings& inputSettin
             inputSettings.Offline = true;
             if (i < argc - 1) {
                 // Take the next argument after OFFLINE as file name
-                std::string filename = "C:\\Users\\ke76boqe\\Projects\\DepthCompression\\test.mkv" ;
-                inputSettings.FileName = filename;  //argv[i + 1];
+                //std::string filename = "C:\\Users\\ke76boqe\\Projects\\DepthCompression\\test.mkv" ;
+                inputSettings.FileName =  argv[i + 1];
                 i++;
             }
             else {
@@ -169,7 +175,7 @@ bool ParseInputSettingsFromArg(int argc, char** argv, InputSettings& inputSettin
     return true;
 }
 
-void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int depthWidth, int depthHeight) {
+k4a_image_t VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int depthWidth, int depthHeight, int count) {
 
     // Obtain original capture that generates the body tracking result
     k4a_capture_t originalCapture = k4abt_frame_get_capture(bodyFrame);
@@ -184,6 +190,9 @@ void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int dep
     //printf("size of point cloud: %d\n", size);
     size_t sizet = k4a_image_get_size(depthImage);
     uint16_t* depth_image_data = (uint16_t*)(void*)k4a_image_get_buffer(depthImage);
+    int32_t width = k4a_image_get_width_pixels(depthImage);
+    int32_t height = k4a_image_get_height_pixels(depthImage);
+    
     uint16_t minDepthValue=UINT_MAX;
     uint16_t maxDepthValue=0;
     for (int i = 0; i < depthWidth * depthHeight; i++)
@@ -203,19 +212,48 @@ void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int dep
             //    maxDepthValue = depth_image_data[i];
             //}
         }
+        /* comment out this Else if you want to save the whole depth image/point cloud scene */
         else
-        {
+        {   // store only points/pixels on the tracked human body
+           
             depth_image_data[i] = 0;
         }
+        // 
         
     }
+
+    // SAVE PNG IMAGE HERE
+    k4a_capture_set_depth_image(originalCapture, depthImage);
+    char str[5];
+    snprintf(str, 5, "%04d", count);
+    std::string s = "";
+    s = output_png_file_name + str + ".png";
+
+    cv::Mat depth_mat = cv::Mat(height, width, CV_16UC1, depth_image_data);
+    cv::imwrite(s, depth_mat);
+
+    // CONVERT 16 bits to 8bits image for visualization
+    //depth_mat.convertTo(depth_mat, CV_8U, 255.0 / 5000.0, 0.0);
+    //cv::imshow("depth image", depth_mat);
+    //cv::waitKey(0);
+
+    // 
+    //std::cout << "Vao loop";
+    //k4a_image_t depth_image = NULL;
+    //k4a_image_t xy_table = NULL;
+    //k4a_image_t point_cloud = NULL;
+    //int point_count = 0;
+    //k4a_calibration_t calibration;
+    //create_xy_table(&calibration, xy_table);
+
     //k4a_image_t segmentedDepthImage = k4a_image_create_from_buffer(depth_image_data);
     //std::cout << minDepthValue << '\t' << maxDepthValue << '\n';
 
     k4a_image_release(bodyIndexMap);
-
-    // Visualize point cloud
     window3d.UpdatePointClouds(depthImage, pointCloudColors);
+    return depthImage;
+    // Visualize point cloud
+    //
 
     // Visualize the skeleton data
     //window3d.CleanJointsAndBones();
@@ -271,11 +309,49 @@ void VisualizeResult(k4abt_frame_t bodyFrame, Window3dWrapper& window3d, int dep
 
 }
 
+static void create_xy_table(const k4a_calibration_t* calibration, k4a_image_t xy_table)
+{
+    k4a_float2_t* table_data = (k4a_float2_t*)(void*)k4a_image_get_buffer(xy_table);
+
+    int width = calibration->depth_camera_calibration.resolution_width;
+    int height = calibration->depth_camera_calibration.resolution_height;
+
+    k4a_float2_t p;
+    k4a_float3_t ray;
+    int valid;
+
+    for (int y = 0, idx = 0; y < height; y++)
+    {
+        p.xy.y = (float)y;
+        for (int x = 0; x < width; x++, idx++)
+        {
+            p.xy.x = (float)x;
+
+            k4a_calibration_2d_to_3d(
+                calibration, &p, 1.f, K4A_CALIBRATION_TYPE_DEPTH, K4A_CALIBRATION_TYPE_DEPTH, &ray, &valid);
+
+            if (valid)
+            {
+                table_data[idx].xy.x = ray.xyz.x;
+                table_data[idx].xy.y = ray.xyz.y;
+            }
+            else
+            {
+                table_data[idx].xy.x = nanf("");
+                table_data[idx].xy.y = nanf("");
+            }
+        }
+    }
+}
+
+
+
 static void generate_point_cloud(const k4a_image_t depth_image,
     const k4a_image_t xy_table,
     k4a_image_t point_cloud,
     int* point_count)
 {
+    //std::cout << "Generating point cloud";
     int width = k4a_image_get_width_pixels(depth_image);
     int height = k4a_image_get_height_pixels(depth_image);
 
@@ -304,6 +380,7 @@ static void generate_point_cloud(const k4a_image_t depth_image,
 
 static void write_point_cloud(const char* file_name, const k4a_image_t point_cloud, int point_count)
 {
+    //std::cout << "Writing point cloud";
     int width = k4a_image_get_width_pixels(point_cloud);
     int height = k4a_image_get_height_pixels(point_cloud);
 
@@ -331,6 +408,7 @@ static void write_point_cloud(const char* file_name, const k4a_image_t point_clo
 
         ss << (float)point_cloud_data[i].xyz.x << " " << (float)point_cloud_data[i].xyz.y << " "
             << (float)point_cloud_data[i].xyz.z << std::endl;
+        //std::cout << "asdfas"; // (float)point_cloud_data[i].xyz.x;
     }
 
     std::ofstream ofs_text(file_name, std::ios::out | std::ios::app);
@@ -374,10 +452,33 @@ void PlayFile(InputSettings inputSettings)
     window3d.Create("3D Visualization", sensorCalibration);
     window3d.SetCloseCallback(CloseCallback);
     window3d.SetKeyCallback(ProcessKey);
+    int frame_count = 0;
 
+    k4a_device_t device = NULL;
+    k4a_device_configuration_t config = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
+    config.depth_mode = K4A_DEPTH_MODE_NFOV_UNBINNED;
+    config.camera_fps = K4A_FRAMES_PER_SECOND_30;
+    config.color_format = K4A_IMAGE_FORMAT_COLOR_MJPG; // or enumeration 1 or 2
+    config.color_resolution = K4A_COLOR_RESOLUTION_1080P;
+    k4a_record_t record_handle;
+    if (K4A_FAILED(k4a_record_create(output_mkv, device, config, &record_handle)))
+    {
+        printf("Failed to create recording \n");
+    }
+    k4a_record_add_imu_track(record_handle);
+    printf("Created record");
+
+    if (K4A_FAILED(k4a_record_write_header(record_handle)))
+    {
+        printf("Failed to write header \n");
+    }
+    
+    k4a_wait_result_t result = K4A_WAIT_RESULT_TIMEOUT;
+    k4a_imu_sample_t imu_sample ;
     while (playbackResult == K4A_STREAM_RESULT_SUCCEEDED && s_isRunning)
     {
         playbackResult = k4a_playback_get_next_capture(playbackHandle, &capture);
+        k4a_playback_get_next_imu_sample(playbackHandle, &imu_sample);
         if (playbackResult == K4A_STREAM_RESULT_EOF)
         {
             // End of file reached
@@ -386,6 +487,9 @@ void PlayFile(InputSettings inputSettings)
 
         if (playbackResult == K4A_STREAM_RESULT_SUCCEEDED)
         {
+         
+
+            frame_count+=1;
             // check to make sure we have a depth image
             k4a_image_t depthImage = k4a_capture_get_depth_image(capture);
             if (depthImage == nullptr) {
@@ -399,9 +503,9 @@ void PlayFile(InputSettings inputSettings)
 
             //enque capture and pop results - synchronous
             k4a_wait_result_t queueCaptureResult = k4abt_tracker_enqueue_capture(tracker, capture, K4A_WAIT_INFINITE);
+         
 
-            // Release the sensor capture once it is no longer needed.
-            k4a_capture_release(capture);
+
 
             if (queueCaptureResult == K4A_WAIT_RESULT_FAILED)
             {
@@ -413,14 +517,66 @@ void PlayFile(InputSettings inputSettings)
             k4a_wait_result_t popFrameResult = k4abt_tracker_pop_result(tracker, &bodyFrame, K4A_WAIT_INFINITE);
             if (popFrameResult == K4A_WAIT_RESULT_SUCCEEDED)
             {
+                k4a_image_t depth_image = NULL;
+                k4a_image_t xy_table = NULL;
+                k4a_image_t point_cloud = NULL;
+                int point_count = 0;
+                //std::string point_cloud_file_name = "C:\\Users\\ke76boqe\\Projects\\Body_tracking\\body-tracking-samples\\PointCloud\\frame";
+                k4a_image_create(K4A_IMAGE_FORMAT_CUSTOM,
+                    sensorCalibration.depth_camera_calibration.resolution_width,
+                    sensorCalibration.depth_camera_calibration.resolution_height,
+                    sensorCalibration.depth_camera_calibration.resolution_width * (int)sizeof(k4a_float2_t),
+                    &xy_table);
+
+                create_xy_table(&sensorCalibration, xy_table);
+
+                k4a_image_create(K4A_IMAGE_FORMAT_CUSTOM,
+                    sensorCalibration.depth_camera_calibration.resolution_width,
+                    sensorCalibration.depth_camera_calibration.resolution_height,
+                    sensorCalibration.depth_camera_calibration.resolution_width * (int)sizeof(k4a_float3_t),
+                    &point_cloud);
+
                 /************* Successfully get a body tracking result, process the result here ***************/
-                VisualizeResult(bodyFrame, window3d, depthWidth, depthHeight); 
+                depth_image=VisualizeResult(bodyFrame, window3d, depthWidth, depthHeight, frame_count); 
+
+                // GENERATE AND SAVE POINT CLOUD HERE
+                generate_point_cloud(depth_image, xy_table, point_cloud, &point_count);
+                char str[5];
+                snprintf(str, 5, "%04d", frame_count);
+                std::string s = "";
+
+                s = point_cloud_file_name + str + ".ply";
+                write_point_cloud(s.c_str(), point_cloud, point_count);
                 //Release the bodyFrame
+            /*    k4a_capture_t originalCapture = k4abt_frame_get_capture(capture);
+                k4a_record_write_capture(record_handle, originalCapture);
+                k4a_capture_release(originalCapture);*/
+
+                if (K4A_FAILED(k4a_record_write_capture(record_handle, capture)))
+                {
+                    printf("Failed to write to mkv file");
+
+                }
+                
+     
+                k4a_result_t write_result = k4a_record_write_imu_sample(record_handle, imu_sample);
+                if (K4A_FAILED(write_result))
+                {
+                    std::cerr << "Runtime error: k4a_record_write_imu_sample() returned " << write_result << std::endl;
+                    break;
+                }
+                // Release the sensor capture once it is no longer needed.
+                k4a_capture_release(capture);
+                //k4a_capture_release(imu);
                 k4abt_frame_release(bodyFrame);
             }
             else
             {
                 std::cout << "Pop body frame result failed!" << std::endl;
+                break;
+            }
+            if(frame_count==140)
+            {
                 break;
             }
         }
@@ -429,6 +585,9 @@ void PlayFile(InputSettings inputSettings)
         window3d.SetJointFrameVisualization(s_visualizeJointFrame);
         window3d.Render();
     }
+
+    k4a_record_flush(record_handle);
+    k4a_record_close(record_handle);
 
     k4abt_tracker_shutdown(tracker);
     k4abt_tracker_destroy(tracker);
@@ -497,10 +656,37 @@ void PlayFromDevice(InputSettings inputSettings)
         // Pop Result from Body Tracker
         k4abt_frame_t bodyFrame = nullptr;
         k4a_wait_result_t popFrameResult = k4abt_tracker_pop_result(tracker, &bodyFrame, 0); // timeout_in_ms is set to 0
+        
         if (popFrameResult == K4A_WAIT_RESULT_SUCCEEDED)
         {
+            k4a_image_t depth_image = NULL;
+            k4a_image_t xy_table = NULL;
+            k4a_image_t point_cloud = NULL;
+            int point_count = 0;
+            //std::string file_name="C:\\Users\\ke76boqe\\Projects\\Body_tracking\\body-tracking-samples\\simple_3d_viewer\\build\\bin\\Debug\\out.ply";
+            k4a_image_create(K4A_IMAGE_FORMAT_CUSTOM,
+                sensorCalibration.depth_camera_calibration.resolution_width,
+                sensorCalibration.depth_camera_calibration.resolution_height,
+                sensorCalibration.depth_camera_calibration.resolution_width * (int)sizeof(k4a_float2_t),
+                &xy_table);
+
+            create_xy_table(&sensorCalibration, xy_table);
+
+            k4a_image_create(K4A_IMAGE_FORMAT_CUSTOM,
+                sensorCalibration.depth_camera_calibration.resolution_width,
+                sensorCalibration.depth_camera_calibration.resolution_height,
+                sensorCalibration.depth_camera_calibration.resolution_width * (int)sizeof(k4a_float3_t),
+                &point_cloud);
+
             /************* Successfully get a body tracking result, process the result here ***************/
-            VisualizeResult(bodyFrame, window3d, depthWidth, depthHeight);
+            depth_image = VisualizeResult(bodyFrame, window3d, depthWidth, depthHeight,0);
+
+            generate_point_cloud(depth_image, xy_table, point_cloud, &point_count);
+
+            //write_point_cloud(file_name.c_str(), point_cloud, point_count);
+
+
+
             //Release the bodyFrame
             k4abt_frame_release(bodyFrame);
         }
